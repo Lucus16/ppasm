@@ -1,0 +1,5 @@
+ppasm
+
+Assembler for the practicum processor.
+Run with python 3, enter input and output filenames on prompt.
+No incorrect syntax detection yet.
