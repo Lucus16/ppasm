@@ -13,7 +13,8 @@ class Lexer:
     def __iter__(self):
         return self
 
-    def lex(self, text):
+    def lex(self, text, source):
+        self.source = source
         self.history = []
         self.line = text
         self.pos = 0
@@ -36,7 +37,7 @@ class Lexer:
                 return self.line[self.history[-1]:]
             self.pos = match.end()
             if self.names[match.lastindex] != None:
-                return (match.group(), self.names[match.lastindex])
+                return (match.group(), self.names[match.lastindex], self.source)
             else:
                 self.history[-1] = self.pos
 
@@ -51,7 +52,7 @@ rules = [
     (r'(?:HALT|READ|WRITE|LOADHI|NOP|JUMP)|'
      r'(?:(?:OR|XOR|AND|ADD|SUB|ROL|MOVE|NEG|NOT|ROR)f?)|CMPf', 'opcode'),
     (r'\.(?:T|F|C|GEU|NC|LU|GE|L|NO|O|NZ|Z|GU|LEU|G|LE|NN|N)', 'condition'),
-    (r'(?:R1[0-5])|(?:R[0-9])', 'register'),
+    (r'(?:R1[0-5])|(?:R[0-9])\b', 'register'),
     (r'\[', None),
     (r'\]', None),
     (r'\,', None),
@@ -184,19 +185,23 @@ def savefile(filename, contents):
     return True
 
 def pass1(lines):
+    global problems
     tokens = []
-    for line in lines:
-        tokens.extend(list(lex.lex(line)))
+    for lineno, line in enumerate(lines, 1):
+        tokens.extend(list(lex.lex(line, lineno)))
         if tokens[-1] == '':
             tokens.pop()
+        if isinstance(tokens[-1], str):
+            print('There was a problem at line', lineno)
+            problems += 1
     labels = dict()
     address = 0
     instructions = [[]]
-    for text, type_ in tokens:
+    for text, type_, lineno in tokens:
         if type_ == 'opcode':
             instructions[-1].append(address - 4)
             address += 4
-            instructions.append([text])
+            instructions.append([lineno, text])
         elif type_ == 'label':
             labels[text[:-1]] = address
         else:
@@ -204,20 +209,25 @@ def pass1(lines):
     instructions[-1].append(address - 4)
     instructions.pop(0)
     for instr in instructions:
-        if instr[1] not in COND and \
-           instr[0] not in ['HALT', 'NOP', 'READ', 'WRITE']:
-            instr.insert(1, '.T')
-        if instr[0] == 'READ' and len(instr) < 5:
-            instr.insert(2, '+0')
-        if instr[0] == 'WRITE' and len(instr) < 5:
+        if instr[2] not in COND and \
+           instr[1] not in ['HALT', 'NOP', 'READ', 'WRITE']:
+            instr.insert(2, '.T')
+        if instr[1] == 'READ' and len(instr) < 6:
             instr.insert(3, '+0')
+        if instr[1] == 'WRITE' and len(instr) < 6:
+            instr.insert(4, '+0')
             
     return (instructions, labels)
 
 def pass2(instructions):
+    global problems
     output = []
     for instr in instructions:
-        output.append(encode(instr))
+        try:
+            output.append(encode(instr[1:]))
+        except:
+            print('There was a problem at line', instr[0])
+            problems += 1
     return output
     
 def evaluate(line, address, big=False):
@@ -227,15 +237,20 @@ def evaluate(line, address, big=False):
     return eval(line) & 0x003fffff if big else eval(line) & 0x000003ff
 
 def assemble(infile, outfile):
-    global labels
+    global labels, problems
+    problems = 0
     lines = loadfile(infile)
     instructions, labels = pass1(lines)
     output = pass2(instructions)
-    savefile(outfile, output)
+    if problems != 0:
+        print('There were', problems, 'problems.')
+        input('Press enter to continue...')
+    else:
+        savefile(outfile, output)
 
 
-input('infile> ', infile)
-input('outfile>', outfile)
+infile = input('infile> ')
+outfile = input('outfile>')
 assemble(infile, outfile)
 
 
