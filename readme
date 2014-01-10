@@ -2,4 +2,16 @@ ppasm
 
 Assembler for the practicum processor.
 Run with python 3, enter input and output filenames on prompt.
-No incorrect syntax detection yet.
+Most problems with the syntax will be found and the line
+where the problem occured will be printed.
+Initial implementation of macros is done:
+
+.macro swap(a, b)
+XOR a, b, a
+XOR b, a, b
+XOR a, b, a
+.end
+
+swap(R3, R5)
+
+swap(R15, R0)

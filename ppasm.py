@@ -184,14 +184,64 @@ def savefile(filename, contents):
         return False
     return True
 
+def pass0(lines):
+    lineno = 1
+    macros = []
+    #get macros
+    while lineno <= len(lines):
+        line = lines[lineno - 1]
+        if line.startswith('.macro'):
+            lparen = line.find('(')
+            rparen = line.rfind(')')
+            args = []
+            mlines = []
+            if lparen != -1 and rparen != -1:
+                args = [x.strip() for x in line[lparen + 1:rparen].split(',')]
+                if args == ['']:
+                    args = []
+                name = line[6:lparen].strip()
+            else:
+                name = line[6:].strip()
+            lines[lineno - 1] = ''
+            lineno += 1
+            while lineno <= len(lines) and not lines[lineno - 1].startswith('.end'):
+                mlines.append(lines[lineno - 1])
+                lines[lineno - 1] = ''
+                lineno += 1
+            lines[lineno - 1] = ''
+            macros.append((name, args, mlines))
+        lineno += 1
+    #apply macros
+    for lineno, line in enumerate(lines, 1):
+        for macro in macros:
+            if line.startswith(macro[0]):
+                if macro[1] == []:
+                    lines[lineno - 1] = ' '.join(macro[2])
+                else:
+                    lparen = line.find('(')
+                    rparen = line.find(')')
+                    if lparen == -1 or rparen == -1:
+                        print('There was a problem at line', lineno)
+                        problems += 1
+                    mlines = macro[2][:]
+                    args = [x.strip() for x in line[lparen + 1:rparen].split(',')]
+                    for index, mline in enumerate(mlines):
+                        for argno, arg in enumerate(macro[1]):
+                            mlines[index] = re.sub(r'\b' + arg + r'\b',
+                                                   args[argno], mlines[index])
+                    lines[lineno - 1] = ' '.join(mlines)
+    return lines
+                
+            
+
 def pass1(lines):
     global problems
     tokens = []
     for lineno, line in enumerate(lines, 1):
         tokens.extend(list(lex.lex(line, lineno)))
-        if tokens[-1] == '':
+        if tokens != [] and tokens[-1] == '':
             tokens.pop()
-        if isinstance(tokens[-1], str):
+        if tokens != [] and isinstance(tokens[-1], str):
             print('There was a problem at line', lineno)
             problems += 1
     labels = dict()
@@ -240,6 +290,7 @@ def assemble(infile, outfile):
     global labels, problems
     problems = 0
     lines = loadfile(infile)
+    lines = pass0(lines)
     instructions, labels = pass1(lines)
     output = pass2(instructions)
     if problems != 0:
