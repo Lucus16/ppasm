@@ -49,9 +49,10 @@ rules = [
     (r'\s+', None),
     (r'[a-zA-Z_.][a-zA-Z0-9_.]*:', 'label'),
     (r'#.*', None),
-    (r'(?:HALT|READ|WRITE|LOADHI|NOP|JUMP)|'
+    (r'(?:HALT|READ|WRITE|LOADHI|NOP|JUMP|.DATA)|'
      r'(?:(?:OR|XOR|AND|ADD|SUB|ROL|MOVE|NEG|NOT|ROR)f?)|CMPf', 'opcode'),
-    (r'\.(?:T|F|C|GEU|NC|LU|GE|L|NO|O|NZ|Z|GU|LEU|G|LE|NN|N)', 'condition'),
+    (r'\.(?:LEU|GEU|LU|GE|GU|LE|NC|NO|NZ|NN|T|F|C|L|O|Z|G|N)', 'condition'),
+    (r'\.(?:LEU|GEU|LU|GE|GU|LE|NC|NO|NZ|NN|T|F|C|L|O|Z|G|N)'.lower(), 'condition'),
     (r'(?:R1[0-5])|(?:R[0-9])\b', 'register'),
     (r'\[', None),
     (r'\]', None),
@@ -59,9 +60,9 @@ rules = [
     (r'[^,#\[\]]+', 'expression'),
     ]
 
-
 lex = Lexer(rules)
 
+stringre = r'(?:"(?:[^"\\]|\\.)*")|' + r"(?:'(?:[^'\\]|\\.)*')"
 
 DESTREG = 0x10000000
 SRCREGA = 0x00000010
@@ -98,15 +99,26 @@ def geta(srca, addr):
     else:
         return SMLCONST * evaluate(srca, addr) | 0x00040000
 
+def datastmt(data):
+    data0 = []
+    for x in data[:-1]:
+        if re.match(stringre, x):
+            tmp = [ord(a) for a in eval(x)]
+            data0.extend(tmp)
+        else:
+            data0.append(evaluate(x, data[-1] + 4 * len(data0), 0xffffffff))
+    return data0
+
 #input is list of arguments as string
 instrfn = {'HALT': (lambda x: 0),
            'NOP': (lambda x: 1),
+           '.DATA': datastmt,
            'READ': (lambda x: ADDRREG * REG[x[0]] |
                     SMLCONST * evaluate(x[1], x[-1]) |
                     DESTREG * REG[x[2]] | 0x00040008),
            'WRITE': (lambda x: SRCREG * REG[x[0]] | ADDRREG * REG[x[1]] |
                      SMLCONST * evaluate(x[2], x[-1]) | 0x0004000c),
-           'LOADHI': (lambda x: COND[x[0]] | BIGCONST * evaluate(x[1], x[-1]) |
+           'LOADHI': (lambda x: COND[x[0]] | BIGCONST * evaluate(x[1], x[-1], 0x003fffff) |
                       DESTREG * REG[x[2]] | 0x00000002),
            'OR': (lambda x: COND[x[0]] | geta(x[1], x[-1]) | SRCREGB * REG[x[2]] |
                   DESTREG * REG[x[3]] | 0x00000001),
@@ -163,7 +175,11 @@ def longhex(s):
 def encode(instruction):
     addr = instruction[-1]
     l = instruction
-    return longhex(addr//4) + ':' + longhex(instrfn[l[0]](l[1:]))
+    data = instrfn[l[0]](l[1:])
+    if isinstance(data, list):
+        return [longhex(addr//4 + index) + ':' + longhex(x) for index, x in enumerate(data)]
+    else:
+        return [longhex(addr//4) + ':' + longhex(data)]
 
 def loadfile(filename):
     try:
@@ -186,7 +202,8 @@ def savefile(filename, contents):
 
 def pass0(lines):
     lineno = 1
-    macros = []
+    macros = [('.LOAD', ['arga', 'argb'], ['LOADHI arga >> 10, argb',
+                                           'ADD arga & 0x000003ff, argb, argb'])]
     #get macros
     while lineno <= len(lines):
         line = lines[lineno - 1]
@@ -221,8 +238,8 @@ def pass0(lines):
                     lparen = line.find('(')
                     rparen = line.find(')')
                     if lparen == -1 or rparen == -1:
-                        print('There was a problem at line', lineno)
-                        problems += 1
+                        lparen = len(macro[0]) + 1
+                        rparen = len(line)
                     mlines = macro[2][:]
                     args = [x.strip() for x in line[lparen + 1:rparen].split(',')]
                     for index, mline in enumerate(mlines):
@@ -246,21 +263,37 @@ def pass1(lines):
             problems += 1
     labels = dict()
     address = 0
+    oldaddress = 0
     instructions = [[]]
+    datamode = False
     for text, type_, lineno in tokens:
-        if type_ == 'opcode':
-            instructions[-1].append(address - 4)
+        if text == '.DATA':
+            datamode = True
+            instructions[-1].append(oldaddress)
+            oldaddress = address
+            instructions.append([lineno, text])
+        elif type_ == 'opcode':
+            instructions[-1].append(oldaddress)
+            oldaddress = address
             address += 4
             instructions.append([lineno, text])
+            datamode = False
         elif type_ == 'label':
             labels[text[:-1]] = address
+            datamode = False
+        elif type_ == 'condition':
+            instructions[-1].append(text.upper())
         else:
             instructions[-1].append(text)
+            if datamode and re.match(stringre, text):
+                address += 4 * len(eval(text))
+            elif datamode:
+                address += 4
     instructions[-1].append(address - 4)
     instructions.pop(0)
     for instr in instructions:
         if instr[2] not in COND and \
-           instr[1] not in ['HALT', 'NOP', 'READ', 'WRITE']:
+           instr[1] not in ['HALT', 'NOP', 'READ', 'WRITE', '.DATA']:
             instr.insert(2, '.T')
         if instr[1] == 'READ' and len(instr) < 6:
             instr.insert(3, '+0')
@@ -270,39 +303,38 @@ def pass1(lines):
     return (instructions, labels)
 
 def pass2(instructions):
-    global problems
+    global problems, DEBUG
     output = []
     for instr in instructions:
         try:
-            output.append(encode(instr[1:]))
+            output.extend(encode(instr[1:]))
         except:
             print('There was a problem at line', instr[0])
             problems += 1
+            if DEBUG: raise
     return output
     
-def evaluate(line, address, big=False):
+def evaluate(line, address, mask=0x000003ff):
     for label, addr in labels.items():
-        line = line.replace(label, str(addr))
+        line = re.sub(r'\b' + label + r'\b', str(addr), line)
     line = line.replace('$', str(address))
-    return eval(line) & 0x003fffff if big else eval(line) & 0x000003ff
-
-def assemble(infile, outfile):
-    global labels, problems
-    problems = 0
-    lines = loadfile(infile)
-    lines = pass0(lines)
-    instructions, labels = pass1(lines)
-    output = pass2(instructions)
-    if problems != 0:
-        print('There were', problems, 'problems.')
-        input('Press enter to continue...')
-    else:
-        savefile(outfile, output)
+    e = eval(line)
+    if isinstance(e, str) and len(e) == 1:
+        e = ord(e)
+    return e & mask
 
 
 infile = input('infile> ')
 outfile = input('outfile>')
-assemble(infile, outfile)
-
+problems = 0
+lines = [x.strip() for x in loadfile(infile)]
+lines0 = pass0(lines)
+instructions, labels = pass1(lines0)
+output = pass2(instructions)
+if problems != 0:
+    print('There were', problems, 'problems.')
+    input('Press enter to continue...')
+else:
+    savefile(outfile, output)
 
 
