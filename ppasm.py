@@ -203,7 +203,7 @@ def savefile(filename, contents):
 def pass0(lines):
     lineno = 1
     macros = [('.LOAD', ['arga', 'argb'], ['LOADHI arga >> 10, argb',
-                                           'ADD arga & 0x000003ff, argb, argb'])]
+                                           'OR arga & 0x000003ff, argb, argb'])]
     #get macros
     while lineno <= len(lines):
         line = lines[lineno - 1]
