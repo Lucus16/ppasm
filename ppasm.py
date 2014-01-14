@@ -1,5 +1,7 @@
 import re
 
+DEBUG = False
+
 class Lexer:
     '''Do not use (), only (?:)'''
     def __init__(self, rules, flags=0):
@@ -203,12 +205,13 @@ def savefile(filename, contents):
 def pass0(lines):
     lineno = 1
     macros = [('.LOAD', ['arga', 'argb'],
-               ['LOADHI (arga >> 10) ^ (0x003fffff * (arga >> 9 & 1), argb',
+               ['LOADHI ((arga >> 10) & 0x003fffff) ^ (0x003fffff * (arga >> 9 & 1)), argb',
                 'XOR arga & 0x3ff, argb, argb'])]
     #get macros
     while lineno <= len(lines):
         line = lines[lineno - 1]
         if line.startswith('.macro'):
+            line = (line + ' ')[:line.find('#')]
             lparen = line.find('(')
             rparen = line.rfind(')')
             args = []
@@ -231,6 +234,7 @@ def pass0(lines):
         lineno += 1
     #apply macros
     for lineno, line in enumerate(lines, 1):
+        line = (line + ' ')[:line.find('#')]
         for macro in macros:
             if line.startswith(macro[0]):
                 if macro[1] == []:
@@ -239,7 +243,7 @@ def pass0(lines):
                     lparen = line.find('(')
                     rparen = line.find(')')
                     if lparen == -1 or rparen == -1:
-                        lparen = len(macro[0]) + 1
+                        lparen = len(macro[0])
                         rparen = len(line)
                     mlines = macro[2][:]
                     args = [x.strip() for x in line[lparen + 1:rparen].split(',')]
